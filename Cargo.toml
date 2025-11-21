@@ -1,0 +1,11 @@
+[package]
+name = "bot_paradex"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+log = "0.4.25"
+paradex = "0.5.4"
+rust_decimal = "1.36.0"
+simple_logger = "5.0.0"
+tokio = "1.43.0"
