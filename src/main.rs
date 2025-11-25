@@ -188,39 +188,41 @@ async fn check_liquidity_and_cancel_if_low(
     }
 }
 
-async fn process_open_orders(
+async fn process_option_open_orders(
     client_private: &mut Client,
     manager: &mut WebsocketManager,
     orders: OrderUpdates,
 ) {
     for order in orders.results {
-        let state = OrderBookState::new();
+        if !order.market.contains("-PERP") {
+            let state = OrderBookState::new();
 
-        if let Err(e) = run_orderbook_subscription(manager, order.market.clone(), &state).await {
-            debug!("Subscription failed for market {}: {}", order.market, e);
-            continue; // go for next order
+            if let Err(e) = run_orderbook_subscription(manager, order.market.clone(), &state).await {
+                debug!("Subscription failed for market {}: {}", order.market, e);
+                continue; // go for next order
+            }
+
+            // Process data retrieved with callback
+
+            // 1) Are we first bid with good margin?
+            let step_size = Decimal::from_f64(STEP_SIZE).unwrap_or_default();
+            let new_price = determine_new_bid_price(&order, &state, step_size).await;
+
+            // 2) Modify order if necessary
+            if new_price != order.price {
+                adjust_order(
+                    client_private,
+                    order.id.clone(),
+                    order.market.clone(),
+                    order.size,
+                    new_price,
+                )
+                .await;
+            }
+
+            // 3) Is there sufficient size below our bid? Cancel order if that's not the case
+            check_liquidity_and_cancel_if_low(client_private, order, &state, new_price).await;
         }
-
-        // Process data retrieved with callback
-
-        // 1) Are we first bid with good margin?
-        let step_size = Decimal::from_f64(STEP_SIZE).unwrap_or_default();
-        let new_price = determine_new_bid_price(&order, &state, step_size).await;
-
-        // 2) Modify order if necessary
-        if new_price != order.price {
-            adjust_order(
-                client_private,
-                order.id.clone(),
-                order.market.clone(),
-                order.size,
-                new_price,
-            )
-            .await;
-        }
-
-        // 3) Is there sufficient size below our bid? Cancel order if that's not the case
-        check_liquidity_and_cancel_if_low(client_private, order, &state, new_price).await;
     }
 }
 
@@ -238,7 +240,7 @@ async fn main() {
     let mut client_private = Client::new(url, l2_private_key_hex_str).await.unwrap();
 
     loop {
-        // Any open positions? Cancel order of same marker + sell market
+        // Any Option open positions? Cancel order of same marker + sell market
         let positions = client_private.positions().await;
         match positions {
             Ok(positions) => {
@@ -289,7 +291,7 @@ async fn main() {
             Ok(orders) => {
                 info!("Nbr of open orders: {:?}", orders.results.len());
                 if orders.results.len() >= 1 {
-                    process_open_orders(&mut client_private, &mut manager, orders).await;
+                    process_option_open_orders(&mut client_private, &mut manager, orders).await;
                 } else {
                     manager.stop().await.unwrap();
                     break;

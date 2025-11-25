@@ -1439,9 +1439,9 @@ dependencies = [
 
 [[package]]
 name = "paradex"
-version = "0.5.5"
+version = "0.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0acfcc2e4a06b6438070ada64b7de7f324b50c89df26eaffbf8a224c61022836"
+checksum = "4d901e34b3d1ca8695e40a160551306e513218fa91714757c1c3cfc71e5c1771"
 dependencies = [
  "cached",
  "chrono",
