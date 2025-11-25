@@ -242,15 +242,15 @@ async fn main() {
         let positions = client_private.positions().await;
         match positions {
             Ok(positions) => {
-                let open_positions: Vec<Position> = positions
+                let open_option_positions: Vec<Position> = positions
                     .results
                     .clone() // clone and consume values
                     .into_iter()
-                    .filter(|position| position.status == PositionStatus::OPEN)
+                    .filter(|position| position.status == PositionStatus::OPEN && !position.market.contains("-PERP"))
                     .collect();
-                info!("Nbr of open positions: {:?}", open_positions.len());
-                if open_positions.len() >= 1 {
-                    for position in open_positions {
+                info!("Nbr of Option open positions: {:?}", open_option_positions.len());
+                if open_option_positions.len() >= 1 {
+                    for position in open_option_positions {
                         // cancel remaining order in this market
                         let result = client_private
                             .cancel_all_orders_for_market(position.market.clone())
