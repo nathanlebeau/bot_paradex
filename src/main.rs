@@ -110,24 +110,19 @@ async fn determine_new_bid_price(
                                 }
                             }
                         } else {
-                            debug!("We are not alone at the top.");
+                            debug!("We are not alone at the top. Checking if can go first bid alone.");
+                            if let Some(ask) = state.first_ask.lock().unwrap().as_ref() {
+                                if let Some(ask_price_decimal) = Decimal::from_f64(ask.price) {
+                                    if ask_price_decimal != bid_price_decimal + step_size {
+                                        new_price = bid_price_decimal + step_size;
+                                    }
+                                }
+                            }
                         }
                     }
                 } else {
                     debug!("We are NOT first bid!");
-                    // if: first_ask.price > first_bid.price + step_size
-                    // => go first bid with price first_bid.price + step_size
-                    // else: go first_bid with price first_bid.price
-                    if let Some(ask) = state.first_ask.lock().unwrap().as_ref() {
-                        debug!("first ask written by callback: {:?}", ask);
-                        if let Some(ask_price_decimal) = Decimal::from_f64(ask.price) {
-                            if ask_price_decimal == bid_price_decimal + step_size {
-                                new_price = bid_price_decimal;
-                            } else {
-                                new_price = bid_price_decimal + step_size;
-                            }
-                        }
-                    }
+                    new_price = bid_price_decimal;
                 }
             } else {
                 error!("cannot convert f64 into decimal");
@@ -197,7 +192,8 @@ async fn process_option_open_orders(
         if !order.market.contains("-PERP") {
             let state = OrderBookState::new();
 
-            if let Err(e) = run_orderbook_subscription(manager, order.market.clone(), &state).await {
+            if let Err(e) = run_orderbook_subscription(manager, order.market.clone(), &state).await
+            {
                 debug!("Subscription failed for market {}: {}", order.market, e);
                 continue; // go for next order
             }
@@ -240,7 +236,7 @@ async fn main() {
     let mut client_private = Client::new(url, l2_private_key_hex_str).await.unwrap();
 
     loop {
-        // Any Option open positions? Cancel order of same marker + sell market
+        // Any Option open positions? Cancel order of same marke + sell market
         let positions = client_private.positions().await;
         match positions {
             Ok(positions) => {
@@ -248,9 +244,15 @@ async fn main() {
                     .results
                     .clone() // clone and consume values
                     .into_iter()
-                    .filter(|position| position.status == PositionStatus::OPEN && !position.market.contains("-PERP"))
+                    .filter(|position| {
+                        position.status == PositionStatus::OPEN
+                            && !position.market.contains("-PERP")
+                    })
                     .collect();
-                info!("Nbr of Option open positions: {:?}", open_option_positions.len());
+                info!(
+                    "Nbr of Option open positions: {:?}",
+                    open_option_positions.len()
+                );
                 if open_option_positions.len() >= 1 {
                     for position in open_option_positions {
                         // cancel remaining order in this market
