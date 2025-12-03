@@ -42,11 +42,8 @@ Define your L2 Paradex private key for example with command export PARADEX_L2_KE
 
 Then launch the program with "cargo run --bin app".
 
-To have Debug log: modify ```simple_logger::init_with_level(log::Level::Info).unwrap();``` 
+To have Debug log: modify ```let logger = Logger::with_level(log_sender, LogLevel::Info);``` 
 
 into
 
-```simple_logger::init_with_level(log::Level::Debug).unwrap();```
-
-### Incoming
-Graphical app
+```let logger = Logger::with_level(log_sender, LogLevel::Debug);```
