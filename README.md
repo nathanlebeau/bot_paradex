@@ -40,10 +40,13 @@ Designed for daemon usage. Each **REFRESH_TIME_SEC** seconds the bot:
 ## Getting started
 Define your L2 Paradex private key for example with command export PARADEX_L2_KEY=<my_hex_private_key> if you are on Linux system.
 
-Then launch the program with "cargo run".
+Then launch the program with "cargo run --bin app".
 
 To have Debug log: modify ```simple_logger::init_with_level(log::Level::Info).unwrap();``` 
 
 into
 
 ```simple_logger::init_with_level(log::Level::Debug).unwrap();```
+
+### Incoming
+Graphical app

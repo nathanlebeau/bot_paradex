@@ -9,3 +9,13 @@ paradex = "0.5.11"
 rust_decimal = "1.36.0"
 simple_logger = "5.0.0"
 tokio = "1.43.0"
+eframe = "0.30"
+egui = "0.30"
+
+[lib]
+name = "backend"
+path = "src/lib.rs"
+
+[[bin]]
+name = "app"
+path = "app/main.rs"

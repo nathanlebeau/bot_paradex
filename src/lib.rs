@@ -222,11 +222,10 @@ async fn process_option_open_orders(
     }
 }
 
-#[tokio::main]
-async fn main() {
+pub async fn run_backend_logic() {
     // Log
     simple_logger::init_with_level(log::Level::Info).unwrap();
-
+    
     // Public manager for WS
     let mut manager = WebsocketManager::new(URL::Production, None).await;
     // Private client for REST api
