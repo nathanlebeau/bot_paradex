@@ -11,6 +11,8 @@ simple_logger = "5.0.0"
 tokio = "1.43.0"
 eframe = "0.30"
 egui = "0.30"
+crossbeam = "0.8"
+chrono = "0.4"
 
 [lib]
 name = "backend"

@@ -1,5 +1,3 @@
-use log::{debug, error, info};
-
 use paradex::{rest::Client, structs, url::URL, ws};
 use structs::{
     ModifyOrderRequest, OrderInstruction, OrderRequest, OrderType, OrderUpdate, OrderUpdates,
@@ -14,19 +12,103 @@ use std::time::Duration;
 mod orderbook_state;
 use orderbook_state::OrderBookState;
 
+use crossbeam::channel::Sender;
+use chrono::Local;
+
+// Log structure
+pub struct Logger {
+    sender: Sender<crate::LogMessage>,
+    min_level: LogLevel,
+}
+
+#[derive(Clone, Copy, PartialEq, PartialOrd, Debug)]
+pub enum LogLevel {
+    Debug = 0,
+    Info = 1,
+    Warn = 2,
+    Error = 3,
+}
+
+impl Logger {
+    pub fn new(sender: Sender<crate::LogMessage>) -> Self {
+        Self { 
+            sender,
+            min_level: LogLevel::Debug, // default: debug
+        }
+    }
+
+    pub fn with_level(sender: Sender<crate::LogMessage>, min_level: LogLevel) -> Self {
+        Self { 
+            sender,
+            min_level,
+        }
+    }
+
+    pub fn set_level(&mut self, level: LogLevel) {
+        self.min_level = level;
+    }
+
+    pub fn info(&self, message: impl Into<String>) {
+        if LogLevel::Info >= self.min_level {
+            self.log("INFO", message.into());
+        }
+    }
+
+    pub fn warn(&self, message: impl Into<String>) {
+        if LogLevel::Warn >= self.min_level {
+            self.log("WARN", message.into());
+        }
+    }
+
+    pub fn error(&self, message: impl Into<String>) {
+        if LogLevel::Error >= self.min_level {
+            self.log("ERROR", message.into());
+        }
+    }
+
+    pub fn debug(&self, message: impl Into<String>) {
+        if LogLevel::Debug >= self.min_level {
+            self.log("DEBUG", message.into());
+        }
+    }
+
+    fn log(&self, level: &str, message: String) {
+        let timestamp = Local::now().format("%H:%M:%S%.3f").to_string();
+        let log_msg = crate::LogMessage {
+            timestamp,
+            level: level.to_string(),
+            message: message.clone(),
+        };
+        
+        // Send to front-end
+        let _ = self.sender.send(log_msg);
+    }
+}
+
+// Struct LogMessage
+#[derive(Clone, Debug)]
+pub struct LogMessage {
+    pub timestamp: String,
+    pub level: String,
+    pub message: String,
+}
+
 const REFRESH_TIME_SEC: u64 = 10;
 const SIZE_MULTIPLIER_BIDDING_MARGIN: i32 = 5;
 const STEP_SIZE: f64 = 0.1;
 const MAX_SPREAD_PRICE: i32 = 5;
 
 async fn run_orderbook_subscription(
+    logger: &Logger,
     manager: &mut WebsocketManager,
     market_symbol: String,
     state: &OrderBookState,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let clones = state.clone_for_callback();
     // Get the order book using public manager
-    debug!("The market of the order is: {:?}", market_symbol);
+    logger.debug(format!("The market of the order is: {:?}", market_symbol));
+    let logger_sender = logger.sender.clone();
+    let logger_level = logger.min_level;
     let orderbook_id = manager
         .subscribe(
             Channel::OrderBook {
@@ -36,7 +118,8 @@ async fn run_orderbook_subscription(
                 price_tick: None,
             },
             Box::new(move |message| {
-                debug!("Received message!");
+                let logger_local = Logger::with_level(logger_sender.clone(), logger_level);
+                logger_local.debug("Received message!");
                 match message {
                     Message::OrderBook(ob_snapshot) => {
                         orderbook_state::extract_data_from_snapshot(&ob_snapshot, &clones);
@@ -49,16 +132,17 @@ async fn run_orderbook_subscription(
         .await
         .unwrap();
     // wait for message
-    debug!("Waiting for OrderBook snapshot notification...");
+    logger.debug(format!("Waiting for OrderBook snapshot notification..."));
     state.notify.notified().await;
     // then unsubscribe
-    debug!("Notification received! Unsubscribing...");
+    logger.debug(format!("Notification received! Unsubscribing..."));
     manager.unsubscribe(orderbook_id).await.unwrap();
 
     Ok(())
 }
 
 async fn adjust_order(
+    logger: &Logger,
     client_private: &mut Client,
     order_id: String,
     order_market: String,
@@ -73,12 +157,13 @@ async fn adjust_order(
         size: order_size,
         order_type: OrderType::LIMIT,
     };
-    info!("Sending modify order {modify_request:?}");
+    logger.info(format!("Sending modify order {modify_request:?}"));
     let result = client_private.modify_order(modify_request).await.unwrap();
-    info!("Modify order result {result:?}");
+    logger.info(format!("Modify order result {result:?}"));
 }
 
 async fn determine_new_bid_price(
+    logger: &Logger,
     order: &OrderUpdate,
     state: &OrderBookState,
     step_size: Decimal,
@@ -88,29 +173,29 @@ async fn determine_new_bid_price(
     let mut new_price = current_price;
 
     if let Some(bid) = state.first_bid.lock().unwrap().as_ref() {
-        debug!("First bid written by callback: {:?}", bid);
+        logger.debug(format!("First bid written by callback: {:?}", bid));
         if let Some(decimal_price) = order.price {
             // compare two prices as decimals
             if let Some(bid_price_decimal) = Decimal::from_f64(bid.price) {
                 if decimal_price == bid_price_decimal {
-                    debug!("We are first bid!");
+                    logger.debug(format!("We are first bid!"));
                     // Check if we are + step_size from second bid or not alone at first bid
                     if let Some(bid_size_decimal) = Decimal::from_f64(bid.size) {
                         if order.size == bid_size_decimal {
-                            debug!(
+                            logger.debug(format!(
                                 "We are first bid alone at the top! Checking if need to re-price."
-                            );
+                            ));
                             if let Some(sec_bid) = state.second_bid.lock().unwrap().as_ref() {
                                 if let Some(sec_bid_size_decimal) = Decimal::from_f64(sec_bid.price)
                                 {
                                     if new_price - sec_bid_size_decimal > step_size {
-                                        debug!("Need re-adjust!");
+                                        logger.debug(format!("Need re-adjust!"));
                                         new_price = sec_bid_size_decimal + step_size;
                                     }
                                 }
                             }
                         } else {
-                            debug!("We are not alone at the top. Checking if can go first bid alone.");
+                            logger.debug(format!("We are not alone at the top. Checking if can go first bid alone."));
                             if let Some(ask) = state.first_ask.lock().unwrap().as_ref() {
                                 if let Some(ask_price_decimal) = Decimal::from_f64(ask.price) {
                                     if ask_price_decimal != bid_price_decimal + step_size {
@@ -121,11 +206,11 @@ async fn determine_new_bid_price(
                         }
                     }
                 } else {
-                    debug!("We are NOT first bid!");
+                    logger.debug(format!("We are NOT first bid!"));
                     new_price = bid_price_decimal;
                 }
             } else {
-                error!("cannot convert f64 into decimal");
+                logger.error(format!("cannot convert f64 into decimal"));
             }
         }
     }
@@ -133,6 +218,7 @@ async fn determine_new_bid_price(
 }
 
 async fn check_liquidity_and_cancel_if_low(
+    logger: &Logger,
     client_private: &mut Client,
     order: OrderUpdate,
     state: &OrderBookState,
@@ -167,7 +253,7 @@ async fn check_liquidity_and_cancel_if_low(
                     glob_size += bid3.size;
                 }
             }
-            debug!("Global used size: {:?}", glob_size);
+            logger.debug(format!("Global used size: {:?}", glob_size));
 
             if let Some(glob_size_decimal) = Decimal::from_f64(glob_size) {
                 if let Some(decimal_multiplier) = Decimal::from_i32(SIZE_MULTIPLIER_BIDDING_MARGIN)
@@ -175,7 +261,7 @@ async fn check_liquidity_and_cancel_if_low(
                     if glob_size_decimal < order.size * decimal_multiplier {
                         // cancel order.
                         let result = client_private.cancel_order(order.id.clone()).await;
-                        info!("Cancelling order result {result:?}");
+                        logger.info(format!("Cancelling order result {result:?}"));
                     }
                 }
             }
@@ -184,6 +270,7 @@ async fn check_liquidity_and_cancel_if_low(
 }
 
 async fn process_option_open_orders(
+    logger: &Logger,
     client_private: &mut Client,
     manager: &mut WebsocketManager,
     orders: OrderUpdates,
@@ -192,9 +279,9 @@ async fn process_option_open_orders(
         if !order.market.contains("-PERP") {
             let state = OrderBookState::new();
 
-            if let Err(e) = run_orderbook_subscription(manager, order.market.clone(), &state).await
+            if let Err(e) = run_orderbook_subscription(logger, manager, order.market.clone(), &state).await
             {
-                debug!("Subscription failed for market {}: {}", order.market, e);
+                logger.debug(format!("Subscription failed for market {}: {}", order.market, e));
                 continue; // go for next order
             }
 
@@ -202,11 +289,12 @@ async fn process_option_open_orders(
 
             // 1) Are we first bid with good margin?
             let step_size = Decimal::from_f64(STEP_SIZE).unwrap_or_default();
-            let new_price = determine_new_bid_price(&order, &state, step_size).await;
+            let new_price = determine_new_bid_price(logger, &order, &state, step_size).await;
 
             // 2) Modify order if necessary
             if new_price != order.price {
                 adjust_order(
+                    logger,
                     client_private,
                     order.id.clone(),
                     order.market.clone(),
@@ -217,14 +305,14 @@ async fn process_option_open_orders(
             }
 
             // 3) Is there sufficient size below our bid? Cancel order if that's not the case
-            check_liquidity_and_cancel_if_low(client_private, order, &state, new_price).await;
+            check_liquidity_and_cancel_if_low(logger, client_private, order, &state, new_price).await;
         }
     }
 }
 
-pub async fn run_backend_logic() {
+pub async fn run_backend_logic(log_sender: Sender<LogMessage>) {
     // Log
-    simple_logger::init_with_level(log::Level::Info).unwrap();
+    let logger = Logger::with_level(log_sender, LogLevel::Info);
     
     // Public manager for WS
     let mut manager = WebsocketManager::new(URL::Production, None).await;
@@ -248,17 +336,16 @@ pub async fn run_backend_logic() {
                             && !position.market.contains("-PERP")
                     })
                     .collect();
-                info!(
-                    "Nbr of Option open positions: {:?}",
-                    open_option_positions.len()
-                );
+                logger.info(format!(
+                    "Nbr of Option open positions: {}",
+                    open_option_positions.len()));
                 if open_option_positions.len() >= 1 {
                     for position in open_option_positions {
                         // cancel remaining order in this market
                         let result = client_private
                             .cancel_all_orders_for_market(position.market.clone())
                             .await;
-                        info!("Cancelling order result {result:?}");
+                        logger.info(format!("Cancelling order result {result:?}"));
                         // Sell position
                         let order_request = OrderRequest {
                             instruction: OrderInstruction::GTC,
@@ -273,14 +360,14 @@ pub async fn run_backend_logic() {
                             stp: None,
                             trigger_price: None,
                         };
-                        info!("Sending order {order_request:?}");
+                        logger.info(format!("Sending order {order_request:?}"));
                         let result = client_private.create_order(order_request).await.unwrap();
-                        info!("Sell order result {result:?}");
+                        logger.info(format!("Sell order result {result:?}"));
                     }
                 }
             }
             Err(err) => {
-                error!("Failed to fetch positions: {}", err);
+                logger.error(format!("Failed to fetch positions: {}", err));
             }
         }
 
@@ -290,16 +377,16 @@ pub async fn run_backend_logic() {
         let orders = client_private.open_orders().await;
         match orders {
             Ok(orders) => {
-                info!("Nbr of open orders: {:?}", orders.results.len());
+                logger.info(format!("Nbr of open orders: {:?}", orders.results.len()));
                 if orders.results.len() >= 1 {
-                    process_option_open_orders(&mut client_private, &mut manager, orders).await;
+                    process_option_open_orders(&logger, &mut client_private, &mut manager, orders).await;
                 } else {
                     manager.stop().await.unwrap();
                     break;
                 }
             }
             Err(err) => {
-                error!("Failed to fetch orders: {}", err);
+                logger.error(format!("Failed to fetch orders: {}", err));
             }
         }
 
