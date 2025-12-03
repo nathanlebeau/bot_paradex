@@ -25,7 +25,7 @@ impl OrderBookState {
         }
     }
 
-    // Fonction utilitaire pour cloner les références pour le callback
+    // Utilities for cloning references for callback
     pub fn clone_for_callback(&self) -> OrderBookStateCallbackClones {
         OrderBookStateCallbackClones {
             first_bid: Arc::clone(&self.first_bid),
@@ -37,7 +37,7 @@ impl OrderBookState {
     }
 }
 
-// Structure temporaire pour passer les clones au callback
+// Temporary struct for callback
 pub struct OrderBookStateCallbackClones {
     pub first_bid: Arc<Mutex<Option<Level>>>,
     pub second_bid: Arc<Mutex<Option<Level>>>,
